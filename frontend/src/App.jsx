@@ -104,7 +104,6 @@ function App() {
         textAlign: 'center'
       }}>🧍‍♂️ Bad Posture Detection App</h1>
 
-      {/* Webcam Toggle */}
       <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
         <label>
           <input
@@ -121,7 +120,6 @@ function App() {
         </label>
       </div>
 
-      {/* Posture Type Selector */}
       <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
         <label>
           Select Posture Type:&nbsp;
@@ -133,7 +131,6 @@ function App() {
         </label>
       </div>
 
-      {/* Upload or Webcam Display */}
       <div style={{ textAlign: 'center' }}>
         {useWebcam ? (
           <>
@@ -157,7 +154,6 @@ function App() {
         )}
       </div>
 
-      {/* Upload and Theme Toggle */}
       <div style={{
         marginTop: '1.5rem',
         display: 'flex',
@@ -187,7 +183,6 @@ function App() {
 
       {loading && <div style={spinnerStyle}></div>}
 
-      {/* Response Output */}
       {response && (
         <div style={{
           marginTop: '2rem',
@@ -211,7 +206,9 @@ function App() {
             <ul style={{ marginTop: '1rem' }}>
               {(response.bad_posture_frames || []).map((item, idx) => (
                 <li key={idx}>
-                  <strong>Frame {item.frame}</strong> — Back Angle: {item.back_angle.toFixed(1)}°, Knee-Toe Diff: {item.knee_toe_diff.toFixed(2)}
+                  <strong>Frame {item.frame}</strong> — 
+                  Back Angle: {item.back_angle !== undefined ? item.back_angle.toFixed(1) : 'N/A'}°, 
+                  Knee-Toe Diff: {item.knee_toe_diff !== undefined ? item.knee_toe_diff.toFixed(2) : 'N/A'}
                 </li>
               ))}
             </ul>
