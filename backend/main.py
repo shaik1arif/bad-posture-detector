@@ -1,119 +1,112 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import cv2
 import numpy as np
 import mediapipe as mp
-import os
 import tempfile
+import os
+import math
 
 app = FastAPI()
 
-# ✅ Allow CORS for your deployed frontend (Vercel)
+# ✅ Update this with your actual frontend deployment URL
 origins = [
-    "https://bad-posture-detector-18qmv911r-shaik1arifs-projects.vercel.app",
-    "http://localhost:5173",  # Optional for local development
+    "https://bad-posture-detector-nine.vercel.app",  # your Vercel frontend URL
+    "http://localhost:5173"  # optional, for local testing
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Use ["*"] if testing only
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
-pose = mp_pose.Pose()
 
 def calculate_angle(a, b, c):
-    """Calculate the angle between three points"""
     a = np.array(a)
     b = np.array(b)
     c = np.array(c)
-    
-    ba = a - b
-    bc = c - b
-    
-    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-    angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
-    
-    return np.degrees(angle)
 
-def process_video(file_path, posture_type):
-    cap = cv2.VideoCapture(file_path)
-    bad_frames = []
-    frame_count = 0
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_count += 1
-
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(image)
-
-        if results.pose_landmarks:
-            lm = results.pose_landmarks.landmark
-
-            # Common keypoints
-            shoulder = [lm[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
-                        lm[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
-            hip = [lm[mp_pose.PoseLandmark.LEFT_HIP.value].x,
-                   lm[mp_pose.PoseLandmark.LEFT_HIP.value].y]
-            knee = [lm[mp_pose.PoseLandmark.LEFT_KNEE.value].x,
-                    lm[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
-            ankle = [lm[mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
-                     lm[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
-            toe = [lm[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value].x,
-                   lm[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value].y]
-
-            back_angle = calculate_angle(shoulder, hip, knee)
-            knee_toe_diff = knee[0] - toe[0]
-
-            # Simple rule-based conditions for bad posture
-            is_bad = False
-            if posture_type == "squat":
-                if back_angle > 130 or knee_toe_diff < -0.05:
-                    is_bad = True
-            elif posture_type == "sitting":
-                if back_angle > 120:
-                    is_bad = True
-
-            if is_bad:
-                print(f"❗ Bad posture detected in frame {frame_count}")
-                bad_frames.append({
-                    "frame": frame_count,
-                    "back_angle": round(back_angle, 2),
-                    "knee_toe_diff": round(knee_toe_diff, 4)
-                })
-            else:
-                print(f"✅ Good posture in frame {frame_count}")
-        else:
-            print(f"⚠️ No person detected in frame {frame_count}")
-
-    cap.release()
-    return {
-        "total_checked_frames": frame_count,
-        "bad_posture_frames": bad_frames
-    }
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians * 180.0 / np.pi)
+    if angle > 180.0:
+        angle = 360 - angle
+    return angle
 
 @app.post("/upload-video")
-async def upload_video(
-    file: UploadFile = File(...),
-    posture_type: str = Form(...)
-):
+async def upload_video(file: UploadFile = File(...), posture_type: str = Form(...)):
     try:
-        suffix = os.path.splitext(file.filename)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp:
+            temp.write(await file.read())
+            temp_path = temp.name
 
-        print(f"📥 Video saved to temp path: {tmp_path}")
-        result = process_video(tmp_path, posture_type)
-        os.remove(tmp_path)
-        return JSONResponse(content=result)
+        cap = cv2.VideoCapture(temp_path)
+        pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+        bad_posture_frames = []
+        frame_index = 0
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_index += 1
+
+            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = pose.process(image)
+
+            if results.pose_landmarks:
+                landmarks = results.pose_landmarks.landmark
+
+                try:
+                    shoulder = [landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
+                                landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
+                    hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x,
+                           landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
+                    knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x,
+                            landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
+                    ankle = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
+                             landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+                    toe = [landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value].x,
+                           landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value].y]
+
+                    back_angle = calculate_angle(shoulder, hip, knee)
+                    knee_toe_diff = knee[0] - toe[0]
+
+                    is_bad = False
+
+                    if posture_type == "squat":
+                        if back_angle < 150 or knee_toe_diff > 0.03:
+                            is_bad = True
+                    elif posture_type == "sitting":
+                        neck = [landmarks[mp_pose.PoseLandmark.NOSE.value].x,
+                                landmarks[mp_pose.PoseLandmark.NOSE.value].y]
+                        neck_angle = calculate_angle(shoulder, neck, hip)
+                        if back_angle < 150 or neck_angle > 30:
+                            is_bad = True
+
+                    if is_bad:
+                        bad_posture_frames.append({
+                            "frame": frame_index,
+                            "back_angle": round(back_angle, 2),
+                            "knee_toe_diff": round(knee_toe_diff, 2)
+                        })
+
+                except Exception as e:
+                    continue
+
+        cap.release()
+        os.remove(temp_path)
+
+        return JSONResponse(content={
+            "total_checked_frames": frame_index,
+            "bad_posture_frames": bad_posture_frames
+        })
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
