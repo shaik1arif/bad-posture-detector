@@ -77,7 +77,7 @@ function App() {
 
     setLoading(true);
     try {
-      const res = await axios.post("http://127.0.0.1:8000/upload-video", formData, {
+      const res = await axios.post("https://bad-posture-detector-vxw8.onrender.com/upload-video", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setResponse(res.data);
