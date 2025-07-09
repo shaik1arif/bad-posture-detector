@@ -2,115 +2,109 @@ from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import cv2
-import mediapipe as mp
 import numpy as np
+import mediapipe as mp
 import tempfile
-import os
+import math
 
 app = FastAPI()
 
-# Allow frontend to call backend (CORS)
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],  # Replace "*" with your Vercel frontend URL for better security
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def read_root():
-    return {"message": "Backend is working!"}
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose(static_image_mode=False)
+
+def calculate_angle(p1, p2, p3):
+    a = np.array(p1)
+    b = np.array(p2)
+    c = np.array(p3)
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians * 180.0 / np.pi)
+    if angle > 180.0:
+        angle = 360 - angle
+    return angle
 
 @app.post("/upload-video")
-async def upload_video(
-    file: UploadFile = File(...),
-    posture_type: str = Form(...)
-):
-    if posture_type not in ["squat", "sitting"]:
-        return JSONResponse(status_code=400, content={"error": "Invalid posture type"})
+async def upload_video(file: UploadFile = File(...), posture_type: str = Form(...)):
+    contents = await file.read()
 
-    # Save uploaded video to a temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp:
-        temp.write(await file.read())
-        video_path = temp.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+        temp_file.write(contents)
+        video_path = temp_file.name
 
-    # Initialize MediaPipe
-    mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose()
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return JSONResponse(status_code=400, content={"error": "Cannot read video"})
 
     bad_posture_frames = []
-    frame_num = 0
+    frame_count = 0
 
-    while True:
+    while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        frame_num += 1
+        frame_count += 1
 
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(image_rgb)
 
-        if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
+        if not results.pose_landmarks:
+            continue
 
-            # Extract needed keypoints
-            shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
-            hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
-            knee = landmarks[mp_pose.PoseLandmark.LEFT_KNEE]
-            ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE]
-            ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
+        landmarks = results.pose_landmarks.landmark
 
-            # Compute angles/distances
-            back_angle = calculate_angle(
-                [shoulder.x, shoulder.y],
-                [hip.x, hip.y],
-                [knee.x, knee.y]
-            )
+        if posture_type == "squat":
+            try:
+                hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x,
+                       landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
+                knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x,
+                        landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
+                ankle = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
+                         landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+                toe = [landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value].x,
+                       landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX.value].y]
 
-            knee_toe_diff = knee.x - ankle.x
-            neck_angle = calculate_angle(
-                [ear.x, ear.y],
-                [shoulder.x, shoulder.y],
-                [hip.x, hip.y]
-            )
+                back_angle = calculate_angle(shoulder:=landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x, hip, knee)
+                knee_toe_diff = knee[0] - toe[0]
 
-            is_bad = False
+                if back_angle < 150 or knee_toe_diff > 0.03:
+                    bad_posture_frames.append({
+                        "frame": frame_count,
+                        "back_angle": back_angle,
+                        "knee_toe_diff": knee_toe_diff
+                    })
 
-            if posture_type == "squat":
-                if back_angle < 150 or knee_toe_diff > 0:
-                    is_bad = True
-            elif posture_type == "sitting":
-                if back_angle < 160 or neck_angle < 150:
-                    is_bad = True
+            except Exception as e:
+                continue
 
-            if is_bad:
-                bad_posture_frames.append({
-                    "frame": frame_num,
-                    "back_angle": back_angle,
-                    "knee_toe_diff": knee_toe_diff,
-                })
+        elif posture_type == "sitting":
+            try:
+                shoulder = [landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
+                            landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
+                ear = [landmarks[mp_pose.PoseLandmark.LEFT_EAR.value].x,
+                       landmarks[mp_pose.PoseLandmark.LEFT_EAR.value].y]
+                hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x,
+                       landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
+
+                neck_angle = calculate_angle(ear, shoulder, hip)
+                if neck_angle < 150:
+                    bad_posture_frames.append({
+                        "frame": frame_count,
+                        "neck_angle": neck_angle
+                    })
+
+            except Exception as e:
+                continue
 
     cap.release()
-    os.remove(video_path)
-
     return {
-        "total_checked_frames": frame_num,
+        "total_checked_frames": frame_count,
         "bad_posture_frames": bad_posture_frames
     }
-
-def calculate_angle(a, b, c):
-    """Calculate angle at point b given three points a, b, c."""
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-
-    ba = a - b
-    bc = c - b
-
-    cosine_angle = np.dot(ba, bc) / (
-        np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-8
-    )
-    angle = np.arccos(np.clip(cosine_angle, -1.0, 1.0))
-    return np.degrees(angle)
