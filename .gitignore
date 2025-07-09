@@ -1,0 +1,16 @@
+# Node & React
+node_modules/
+dist/
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Specific bad folder
+backend/venv310/
+
+# OS junk
+.DS_Store
